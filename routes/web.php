@@ -4,9 +4,9 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ProjectController;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function () {
-    return view('welcome');
-});
+// Route::get('/drive', function () {
+//     return view('welcome');
+// });
 
 Route::get('/dashboard', function () {
     return view('dashboard');
@@ -37,14 +37,13 @@ Route::middleware(['auth'])->group(function () {
         ->name('folders.store');
 
     Route::patch('/folders/{folder}/rename', [ProjectController::class, 'renameFolder'])
-    ->name('folders.rename');
+        ->name('folders.rename');
 
     Route::delete('/folders/{folder}', [ProjectController::class, 'deleteFolder'])
         ->name('folders.delete');
 
     Route::delete('/files/{file}', [ProjectController::class, 'deleteFile'])
         ->name('files.delete');
-
 });
 
 Route::post('/files', [ProjectController::class, 'storeFile'])
@@ -60,7 +59,7 @@ Route::patch('/files/{file}/toggle-public', [ProjectController::class, 'togglePu
 Route::get('/public/files/{file}', [ProjectController::class, 'publicDownload'])
     ->name('files.public');
 
-Route::get('/drive', [ProjectController::class, 'publicDrive'])
+Route::get('/', [ProjectController::class, 'publicDrive'])
     ->name('drive.index');
 
 Route::get('/drive/folder/{folder}', [ProjectController::class, 'publicFolder'])
@@ -83,7 +82,11 @@ Route::get('/folders/{folder}', [ProjectController::class, 'showFolder'])
     ->name('folders.show')
     ->middleware('auth');
 
+Route::get(
+    '/public/file/{token}',
+    [ProjectController::class, 'togglePublic']
+)->name('files.public.token');
 
-require __DIR__.'/auth.php';
 
 
+require __DIR__ . '/auth.php';

@@ -38,7 +38,6 @@ class ProjectController extends Controller
         Storage::makeDirectory("projects/{$slug}");
 
         return redirect()->route('projects.index');
-
     }
 
     public function index()
@@ -50,13 +49,43 @@ class ProjectController extends Controller
 
     public function show(Project $project)
     {
-        $rootFolder = $project->folders()
+        // Ambil root folder project
+        $folder = $project->folders()
             ->whereNull('parent_id')
-            ->with('files')
             ->first();
 
-        return view('projects.show', compact('project', 'rootFolder'));
+        $subFolders = $folder->children;
+
+        $files = \App\Models\File::where('folder_id', $folder->id)
+            ->where('is_latest', true)
+            ->get();
+
+        $allVersions = \App\Models\File::where('folder_id', $folder->id)
+            ->orderBy('version')
+            ->get()
+            ->groupBy('base_name');
+
+        $breadcrumb = [$folder];
+
+        return view('projects.show', compact(
+            'project',
+            'folder',
+            'subFolders',
+            'files',
+            'allVersions',
+            'breadcrumb'
+        ));
     }
+
+    // public function show(Project $project)
+    // {
+    //     $rootFolder = $project->folders()
+    //         ->whereNull('parent_id')
+    //         ->with('files')
+    //         ->first();
+
+    //     return view('projects.show', compact('project', 'rootFolder'));
+    // }
 
     public function storeFolder(Request $request)
     {
@@ -89,42 +118,52 @@ class ProjectController extends Controller
         $request->validate([
             'project_id' => 'required',
             'folder_id' => 'required',
-            'file' => 'required|file|max:2048' // 2048 KB = 2MB
+            'file' => 'required|file|max:2048'
         ]);
 
         $folder = Folder::findOrFail($request->folder_id);
-
         $file = $request->file('file');
 
         $originalName = $file->getClientOriginalName();
+        $extension = $file->getClientOriginalExtension();
+        $baseName = pathinfo($originalName, PATHINFO_FILENAME);
 
+        // 🔥 Cek apakah sudah ada file dengan nama dasar sama
+        $latestVersion = \App\Models\File::where('folder_id', $folder->id)
+            ->where('filename', 'LIKE', $baseName . '%')
+            ->max('version');
 
-        Storage::makeDirectory($folder->path);
+        $version = $latestVersion ? $latestVersion + 1 : 1;
 
+        // Nama file baru
+        $newName = $version > 1
+            ? $baseName . '_v' . $version . '.' . $extension
+            : $originalName;
+
+        $fullPath = $folder->path . '/' . $newName;
+
+        // Upload file
         Storage::putFileAs(
             $folder->path,
             $file,
-            $originalName
+            $newName
         );
 
-        if (Storage::exists($folder->path . '/' . $originalName)) {
-            return back()->withErrors([
-                'file' => 'File dengan nama yang sama sudah ada.'
-            ]);
-        }
-
+        // Simpan ke DB
         \App\Models\File::create([
-            'folder_id' => $folder->id,
-            'filename' => $file->getClientOriginalName(),
-            'stored_name' => $originalName,
-            'extension' => $file->getClientOriginalExtension(),
-            'size' => $file->getSize(),
-            'path' => $folder->path . '/' . $originalName,
-            'is_public' => false
+            'folder_id'   => $folder->id,
+            'filename'    => $newName, // ← INI YANG PENTING
+            'stored_name' => $newName,
+            'extension'   => $extension,
+            'size'        => $file->getSize(),
+            'path'        => $folder->path . '/' . $newName,
+            'is_public'   => false
         ]);
+
 
         return redirect()->route('projects.show', $request->project_id);
     }
+
 
     public function downloadFile(\App\Models\File $file)
     {
@@ -138,29 +177,57 @@ class ProjectController extends Controller
     }
 
 
+    // public function togglePublic(\App\Models\File $file)
+    // {
+    //     $file->update([
+    //         'is_public' => !$file->is_public
+    //     ]);
+
+    //     return back();
+    // }
+
     public function togglePublic(\App\Models\File $file)
     {
-        $file->update([
-            'is_public' => !$file->is_public
-        ]);
+        if ($file->is_public) {
+            // turn OFF
+            $file->update([
+                'is_public' => false,
+                'public_token' => null
+            ]);
+        } else {
+            // turn ON
+            $file->update([
+                'is_public' => true,
+                'public_token' => Str::random(40)
+            ]);
+        }
 
         return back();
     }
 
-    public function publicDownload(\App\Models\File $file)
+    public function publicDownload($token)
     {
-        if (!$file->is_public) {
-            abort(403);
-        }
-
-        if (!Storage::exists($file->path)) {
-            abort(404);
-        }
-
-        $file->increment('download_count'); // WAJIB ADA
+        $file = \App\Models\File::where('public_token', $token)
+            ->where('is_public', true)
+            ->firstOrFail();
 
         return Storage::download($file->path, $file->filename);
     }
+
+    // public function publicDownload(\App\Models\File $file)
+    // {
+    //     if (!$file->is_public) {
+    //         abort(403);
+    //     }
+
+    //     if (!Storage::exists($file->path)) {
+    //         abort(404);
+    //     }
+
+    //     $file->increment('download_count'); // WAJIB ADA
+
+    //     return Storage::download($file->path, $file->filename);
+    // }
 
 
 
@@ -241,7 +308,17 @@ class ProjectController extends Controller
     public function showFolder(\App\Models\Folder $folder)
     {
         $subFolders = $folder->children;
-        $files = $folder->files;
+
+        // 🔥 Ambil hanya versi terbaru per file
+        $files = \App\Models\File::where('folder_id', $folder->id)
+            ->where('is_latest', true)
+            ->get();
+
+        // 🔥 Ambil semua versi dan group berdasarkan base_name
+        $allVersions = \App\Models\File::where('folder_id', $folder->id)
+            ->orderBy('version')
+            ->get()
+            ->groupBy('base_name');
 
         // Generate breadcrumb
         $breadcrumb = [];
@@ -252,10 +329,11 @@ class ProjectController extends Controller
             $current = $current->parent;
         }
 
-        return view('projects.folder', compact(
+        return view('projects.show', compact(
             'folder',
             'subFolders',
             'files',
+            'allVersions',
             'breadcrumb'
         ));
     }
@@ -291,7 +369,4 @@ class ProjectController extends Controller
 
         return back();
     }
-
-
-
 }

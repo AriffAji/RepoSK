@@ -1,69 +1,77 @@
 <!DOCTYPE html>
 <html>
+
 <head>
     <title>{{ $folder->name }}</title>
     @vite(['resources/css/app.css'])
 </head>
+
 <body class="bg-gray-100">
 
-<div class="max-w-6xl mx-auto mt-10">
+    <div class="max-w-6xl mx-auto mt-10">
 
-    <a href="{{ url()->previous() }}"
+        {{-- <a href="{{ url()->previous() }}"
        class="text-blue-600 hover:underline mb-4 inline-block">
         ← Back
-    </a>
+    </a> --}}
 
-    <h1 class="text-2xl font-bold mb-6">
-        📁 {{ $folder->name }}
-    </h1>
-
-    <div class="mb-4 text-sm text-gray-600">
-        <a href="{{ route('drive.index') }}" class="hover:underline">
-            Drive
+        <a href="{{ route('drive.index') }}" class="text-blue-600 hover:underline">
+            ← Home
         </a>
 
-        @foreach($breadcrumb as $crumb)
-            &gt;
-            <a href="{{ route('drive.folder', $crumb->id) }}"
-            class="hover:underline">
-                {{ $crumb->name }}
+        <h1 class="text-2xl font-bold mb-6">
+            📁 {{ $folder->name }}
+        </h1>
+
+        <div class="mb-4 text-sm text-gray-600">
+            <a href="{{ route('drive.index') }}" class="hover:underline">
+                Drive
             </a>
-        @endforeach
-    </div>
 
-    <div class="bg-white p-6 rounded shadow">
-
-        {{-- Subfolders --}}
-        @foreach($folders as $sub)
-            <div class="py-2 border-b">
-                <a href="{{ route('drive.folder', $sub) }}"
-                   class="hover:underline">
-                    📁 {{ $sub->name }}
+            @foreach ($breadcrumb as $crumb)
+                &gt;
+                <a href="{{ route('drive.folder', $crumb->id) }}" class="hover:underline">
+                    {{ $crumb->name }}
                 </a>
-            </div>
-        @endforeach
+            @endforeach
+        </div>
 
-        {{-- Public Files --}}
-        @foreach($files as $file)
-            <div class="py-2 border-b flex justify-between items-center">
-                <div>
-                    📄 {{ $file->filename }}
+        <div class="bg-white p-6 rounded shadow">
 
-                    <span class="text-xs text-gray-400 ml-2">
-                        ({{ $file->download_count }} downloads)
-                    </span>
+            {{-- Subfolders --}}
+            @foreach ($folders as $sub)
+                <div class="py-2 border-b">
+                    <a href="{{ route('drive.folder', $sub) }}" class="hover:underline">
+                        📁 {{ $sub->name }}
+                    </a>
                 </div>
+            @endforeach
 
-                <a href="{{ route('files.public', $file) }}"
-                class="text-blue-600 hover:underline">
-                    Download
-                </a>
-            </div>
-        @endforeach
+            {{-- Public Files --}}
+            @foreach ($files as $file)
+                <div class="py-2 border-b flex justify-between items-center">
+                    <div>
+                        📄 {{ $file->filename }}
+
+                        <span class="text-xs text-gray-400 ml-2">
+                            ({{ $file->download_count }} downloads)
+                        </span>
+                    </div>
+
+                    @if ($file->is_public && $file->public_token)
+                        <a href="{{ route('files.public.token', $file->public_token) }}"
+                            class="text-blue-600 hover:underline" target="_blank">
+                            Download
+                        </a>
+                    @endif
+                </div>
+            @endforeach
+
+
+        </div>
 
     </div>
-
-</div>
 
 </body>
+
 </html>
