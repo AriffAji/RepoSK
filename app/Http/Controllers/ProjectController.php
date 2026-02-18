@@ -8,6 +8,8 @@ use App\Models\File;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Log;
+
 
 class ProjectController extends Controller
 {
@@ -77,16 +79,6 @@ class ProjectController extends Controller
         ));
     }
 
-    // public function show(Project $project)
-    // {
-    //     $rootFolder = $project->folders()
-    //         ->whereNull('parent_id')
-    //         ->with('files')
-    //         ->first();
-
-    //     return view('projects.show', compact('project', 'rootFolder'));
-    // }
-
     public function storeFolder(Request $request)
     {
         $request->validate([
@@ -144,11 +136,11 @@ class ProjectController extends Controller
 
         // Upload file
         Storage::putFileAs(
-            $folder->path,
-            $file,
-            $newName
+                $folder->path,
+                $file,
+                $newName
         );
-
+        
         // Simpan ke DB
         \App\Models\File::create([
             'folder_id'   => $folder->id,
@@ -177,59 +169,39 @@ class ProjectController extends Controller
     }
 
 
-    // public function togglePublic(\App\Models\File $file)
-    // {
-    //     $file->update([
-    //         'is_public' => !$file->is_public
-    //     ]);
-
-    //     return back();
-    // }
-
     public function togglePublic(\App\Models\File $file)
     {
-        if ($file->is_public) {
-            // turn OFF
-            $file->update([
-                'is_public' => false,
-                'public_token' => null
-            ]);
-        } else {
-            // turn ON
+        if (!$file->is_public) {
+
             $file->update([
                 'is_public' => true,
-                'public_token' => Str::random(40)
+                'public_token' => $file->public_token ?? Str::random(40)
+            ]);
+
+        } else {
+
+            $file->update([
+                'is_public' => false
             ]);
         }
 
         return back();
     }
 
-    public function publicDownload($token)
+    public function publicDownload(File $file)
     {
-        $file = \App\Models\File::where('public_token', $token)
-            ->where('is_public', true)
-            ->firstOrFail();
+        if (!$file->is_public) {
+            abort(403);
+        }
+
+        if (!Storage::exists($file->path)) {
+            abort(404);
+        }
+
+        $file->increment('download_count');
 
         return Storage::download($file->path, $file->filename);
     }
-
-    // public function publicDownload(\App\Models\File $file)
-    // {
-    //     if (!$file->is_public) {
-    //         abort(403);
-    //     }
-
-    //     if (!Storage::exists($file->path)) {
-    //         abort(404);
-    //     }
-
-    //     $file->increment('download_count'); // WAJIB ADA
-
-    //     return Storage::download($file->path, $file->filename);
-    // }
-
-
 
     public function publicDrive()
     {
@@ -361,12 +333,57 @@ class ProjectController extends Controller
     }
 
 
-    public function deleteFile(\App\Models\File $file)
+    public function deleteFile(File $file)
     {
-        \Illuminate\Support\Facades\Storage::delete($file->path);
-
+        Storage::delete($file->path);
         $file->delete();
 
         return back();
     }
+
+    private function deleteFolderRecursive($folder)
+    {
+        // 1️⃣ Hapus semua file dalam folder
+        foreach ($folder->files as $file) {
+
+            if (Storage::exists($file->path)) {
+                Storage::delete($file->path);
+            }
+
+            $file->delete();
+        }
+
+        // 2️⃣ Hapus semua subfolder secara recursive
+        foreach ($folder->children as $child) {
+            $this->deleteFolderRecursive($child);
+        }
+
+        // 3️⃣ Baru hapus folder fisik (SETELAH file & child hilang)
+        if (Storage::exists($folder->path)) {
+            try {
+                Storage::deleteDirectory($folder->path);
+            } catch (\Exception $e) {
+                Log::warning('Folder delete failed: ' . $e->getMessage());
+            }
+        }
+
+        // 4️⃣ Hapus folder database
+        $folder->delete();
+    }
+
+    public function destroy(\App\Models\Project $project)
+    {
+        // Ambil root folder project
+        $rootFolder = $project->folders()->whereNull('parent_id')->first();
+
+        if ($rootFolder) {
+            $this->deleteFolderRecursive($rootFolder);
+        }
+
+        $project->delete();
+
+        return redirect()->route('projects.index')
+            ->with('success', 'Project deleted successfully.');
+    }
+
 }

@@ -82,10 +82,13 @@ Route::get('/folders/{folder}', [ProjectController::class, 'showFolder'])
     ->name('folders.show')
     ->middleware('auth');
 
-Route::get(
-    '/public/file/{token}',
-    [ProjectController::class, 'togglePublic']
-)->name('files.public.token');
+// Route::get('/public/file/{token}',[ProjectController::class, 'publicDownload']
+//     )->name('files.public.token');
+
+Route::delete('/projects/{project}', [ProjectController::class, 'destroy']
+   )->name('projects.delete');
+
+
 
 
 
