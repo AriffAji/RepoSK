@@ -10,9 +10,18 @@ use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
 
-
 class ProjectController extends Controller
 {
+    /* ======================================================
+     | PROJECT
+     ======================================================*/
+
+    public function index()
+    {
+        $projects = Project::latest()->get();
+        return view('projects.index', compact('projects'));
+    }
+
     public function store(Request $request)
     {
         $request->validate([
@@ -27,42 +36,32 @@ class ProjectController extends Controller
             'created_by' => $request->user()->id
         ]);
 
-        // buat root folder di database
-        $rootFolder = Folder::create([
+        Folder::create([
             'project_id' => $project->id,
-            'parent_id' => null,
-            'name' => $project->name,
-            'path' => "projects/{$slug}"
+            'parent_id'  => null,
+            'name'       => $project->name,
+            'path'       => "projects/{$slug}"
         ]);
 
-
-        // buat folder fisik di storage
         Storage::makeDirectory("projects/{$slug}");
 
-        return redirect()->route('projects.index');
-    }
-
-    public function index()
-    {
-        $projects = Project::latest()->get();
-
-        return view('projects.index', compact('projects'));
+        return redirect()->route('projects.index')
+            ->with('success', 'Project created successfully.');
     }
 
     public function show(Project $project)
     {
-        // Ambil root folder project
         $folder = $project->folders()
             ->whereNull('parent_id')
-            ->first();
+            ->firstOrFail();
 
         $subFolders = $folder->children;
 
-        $files = \App\Models\File::where('folder_id', $folder->id)
+        $files = File::where('folder_id', $folder->id)
             ->where('is_latest', true)
             ->get();
 
-        $allVersions = \App\Models\File::where('folder_id', $folder->id)
+        $allVersions = File::where('folder_id', $folder->id)
             ->orderBy('version')
             ->get()
             ->groupBy('base_name');
@@ -79,166 +78,18 @@ class ProjectController extends Controller
         ));
     }
 
-    public function storeFolder(Request $request)
+    public function destroy(Project $project)
     {
-        $request->validate([
-            'project_id' => 'required',
-            'parent_id' => 'nullable',
-            'name' => 'required'
-        ]);
+        $rootFolder = $project->folders()->whereNull('parent_id')->first();
 
-        $parentFolder = Folder::find($request->parent_id);
-
-        $path = $parentFolder
-            ? $parentFolder->path . '/' . $request->name
-            : "projects/" . $request->name;
-
-        $folder = Folder::create([
-            'project_id' => $request->project_id,
-            'parent_id' => $request->parent_id,
-            'name' => $request->name,
-            'path' => $path
-        ]);
-
-        Storage::makeDirectory($path);
-
-        return back();
-    }
-
-    public function storeFile(Request $request)
-    {
-        $request->validate([
-            'project_id' => 'required',
-            'folder_id' => 'required',
-            'file' => 'required|file|max:2048'
-        ]);
-
-        $folder = Folder::findOrFail($request->folder_id);
-        $file = $request->file('file');
-
-        $originalName = $file->getClientOriginalName();
-        $extension = $file->getClientOriginalExtension();
-        $baseName = pathinfo($originalName, PATHINFO_FILENAME);
-
-        // 🔥 Cek apakah sudah ada file dengan nama dasar sama
-        $latestVersion = \App\Models\File::where('folder_id', $folder->id)
-            ->where('filename', 'LIKE', $baseName . '%')
-            ->max('version');
-
-        $version = $latestVersion ? $latestVersion + 1 : 1;
-
-        // Nama file baru
-        $newName = $version > 1
-            ? $baseName . '_v' . $version . '.' . $extension
-            : $originalName;
-
-        $fullPath = $folder->path . '/' . $newName;
-
-        // Upload file
-        Storage::putFileAs(
-                $folder->path,
-                $file,
-                $newName
-        );
-        
-        // Simpan ke DB
-        \App\Models\File::create([
-            'folder_id'   => $folder->id,
-            'filename'    => $newName, // ← INI YANG PENTING
-            'stored_name' => $newName,
-            'extension'   => $extension,
-            'size'        => $file->getSize(),
-            'path'        => $folder->path . '/' . $newName,
-            'is_public'   => false
-        ]);
-
-
-        return redirect()->route('projects.show', $request->project_id);
-    }
-
-
-    public function downloadFile(\App\Models\File $file)
-    {
-        if (!Storage::exists($file->path)) {
-            abort(404);
+        if ($rootFolder) {
+            $this->deleteFolderRecursive($rootFolder);
         }
 
-        $file->increment('download_count');
+        $project->delete();
 
-        return Storage::download($file->path, $file->filename);
-    }
-
-
-    public function togglePublic(\App\Models\File $file)
-    {
-        if (!$file->is_public) {
-
-            $file->update([
-                'is_public' => true,
-                'public_token' => $file->public_token ?? Str::random(40)
-            ]);
-
-        } else {
-
-            $file->update([
-                'is_public' => false
-            ]);
-        }
-
-        return back();
-    }
-
-    public function publicDownload(File $file)
-    {
-        if (!$file->is_public) {
-            abort(403);
-        }
-
-        if (!Storage::exists($file->path)) {
-            abort(404);
-        }
-
-        $file->increment('download_count');
-
-        return Storage::download($file->path, $file->filename);
-    }
-
-    public function publicDrive()
-    {
-        $projects = \App\Models\Project::all();
-
-        return view('drive.index', compact('projects'));
-    }
-
-    public function publicFolder(\App\Models\Folder $folder)
-    {
-        $folders = $folder->children;
-        $files = $folder->files()->where('is_public', true)->get();
-
-        // generate breadcrumb
-        $breadcrumb = [];
-        $current = $folder;
-
-        while ($current) {
-            array_unshift($breadcrumb, $current);
-            $current = $current->parent;
-        }
-
-        return view('drive.folder', compact('folder', 'folders', 'files', 'breadcrumb'));
-    }
-
-    public function publicSearch(Request $request)
-    {
-        $keyword = $request->q;
-
-        $files = \App\Models\File::where('is_public', true)
-            ->where('filename', 'like', "%{$keyword}%")
-            ->get();
-
-        $folders = \App\Models\Folder::where('name', 'like', "%{$keyword}%")
-            ->get();
-
-        return view('drive.search', compact('files', 'folders', 'keyword'));
+        return redirect()->route('projects.index')
+            ->with('success', 'Project deleted successfully.');
     }
 
     public function monitoring()
@@ -277,22 +128,163 @@ class ProjectController extends Controller
         ));
     }
 
-    public function showFolder(\App\Models\Folder $folder)
+
+    /* ======================================================
+     | FOLDER
+     ======================================================*/
+
+    public function storeFolder(Request $request)
     {
-        $subFolders = $folder->children;
+        $request->validate([
+            'project_id' => 'required',
+            'parent_id'  => 'nullable',
+            'name'       => 'required|string|max:255'
+        ]);
 
-        // 🔥 Ambil hanya versi terbaru per file
-        $files = \App\Models\File::where('folder_id', $folder->id)
-            ->where('is_latest', true)
-            ->get();
+        $parent = Folder::find($request->parent_id);
 
-        // 🔥 Ambil semua versi dan group berdasarkan base_name
-        $allVersions = \App\Models\File::where('folder_id', $folder->id)
-            ->orderBy('version')
-            ->get()
-            ->groupBy('base_name');
+        $path = $parent
+            ? $parent->path . '/' . $request->name
+            : "projects/" . $request->name;
 
-        // Generate breadcrumb
+        Folder::create([
+            'project_id' => $request->project_id,
+            'parent_id'  => $request->parent_id,
+            'name'       => $request->name,
+            'path'       => $path
+        ]);
+
+        Storage::makeDirectory($path);
+
+        return back()->with('success', 'Folder created successfully.');
+    }
+
+    public function renameFolder(Request $request, Folder $folder)
+    {
+        $request->validate([
+            'name' => 'required|string|max:255'
+        ]);
+
+        $folder->update(['name' => $request->name]);
+
+        return back()->with('success', 'Folder renamed successfully.');
+    }
+
+    public function deleteFolder(Folder $folder)
+    {
+        $this->deleteFolderRecursive($folder);
+
+        return back()->with('success', 'Folder deleted successfully.');
+    }
+
+
+    /* ======================================================
+     | FILE
+     ======================================================*/
+
+    public function storeFile(Request $request)
+    {
+        $request->validate([
+            'project_id' => 'required',
+            'folder_id'  => 'required',
+            'file'       => 'required|file|max:2048'
+        ]);
+
+        $folder = Folder::findOrFail($request->folder_id);
+        $file   = $request->file('file');
+
+        $originalName = $file->getClientOriginalName();
+        $extension    = $file->getClientOriginalExtension();
+        $baseName     = pathinfo($originalName, PATHINFO_FILENAME);
+
+        $latestVersion = File::where('folder_id', $folder->id)
+            ->where('filename', 'LIKE', $baseName . '%')
+            ->max('version');
+
+        $version = $latestVersion ? $latestVersion + 1 : 1;
+
+        $newName = $version > 1
+            ? $baseName . '_v' . $version . '.' . $extension
+            : $originalName;
+
+        Storage::putFileAs($folder->path, $file, $newName);
+
+        File::create([
+            'folder_id'   => $folder->id,
+            'filename'    => $newName,
+            'stored_name' => $newName,
+            'extension'   => $extension,
+            'size'        => $file->getSize(),
+            'path'        => $folder->path . '/' . $newName,
+            'is_public'   => false
+        ]);
+
+        return redirect()->route('projects.show', $request->project_id)
+            ->with('success', 'File uploaded successfully.');
+    }
+
+    public function deleteFile(File $file)
+    {
+        if (Storage::exists($file->path)) {
+            Storage::delete($file->path);
+        }
+
+        $file->delete();
+
+        return back()->with('success', 'File deleted successfully.');
+    }
+
+    public function downloadFile(File $file)
+    {
+        if (!Storage::exists($file->path)) {
+            abort(404);
+        }
+
+        $file->increment('download_count');
+
+        return Storage::download($file->path, $file->filename);
+    }
+
+    public function togglePublic(File $file)
+    {
+        $file->update([
+            'is_public' => !$file->is_public
+        ]);
+
+        return back()->with('success', 'File visibility updated.');
+    }
+
+    public function publicDownload(File $file)
+    {
+        if (!$file->is_public) {
+            abort(403);
+        }
+
+        if (!Storage::exists($file->path)) {
+            abort(404);
+        }
+
+        $file->increment('download_count');
+
+        return Storage::download($file->path, $file->filename);
+    }
+
+
+    /* ======================================================
+     | PUBLIC DRIVE
+     ======================================================*/
+
+    public function publicDrive()
+    {
+        $projects = Project::all();
+        return view('drive.index', compact('projects'));
+    }
+
+    public function publicFolder(Folder $folder)
+    {
+        $folders = $folder->children;
+        $files   = $folder->files()->where('is_public', true)->get();
+
         $breadcrumb = [];
         $current = $folder;
 
@@ -301,64 +293,41 @@ class ProjectController extends Controller
             $current = $current->parent;
         }
 
-        return view('projects.show', compact(
-            'folder',
-            'subFolders',
-            'files',
-            'allVersions',
-            'breadcrumb'
-        ));
+        return view('drive.folder', compact('folder', 'folders', 'files', 'breadcrumb'));
     }
 
-    public function renameFolder(Request $request, \App\Models\Folder $folder)
+    public function publicSearch(Request $request)
     {
-        $request->validate([
-            'name' => 'required|string|max:255'
-        ]);
+        $keyword = $request->q;
 
-        $folder->update([
-            'name' => $request->name
-        ]);
+        $files = File::where('is_public', true)
+            ->where('filename', 'like', "%{$keyword}%")
+            ->get();
 
-        return back();
-    }
+        $folders = Folder::where('name', 'like', "%{$keyword}%")
+            ->get();
 
-    public function deleteFolder(\App\Models\Folder $folder)
-    {
-        \Illuminate\Support\Facades\Storage::deleteDirectory($folder->path);
-
-        $folder->delete();
-
-        return back();
+        return view('drive.search', compact('files', 'folders', 'keyword'));
     }
 
 
-    public function deleteFile(File $file)
-    {
-        Storage::delete($file->path);
-        $file->delete();
-
-        return back();
-    }
+    /* ======================================================
+     | HELPER
+     ======================================================*/
 
     private function deleteFolderRecursive($folder)
     {
-        // 1️⃣ Hapus semua file dalam folder
         foreach ($folder->files as $file) {
-
             if (Storage::exists($file->path)) {
                 Storage::delete($file->path);
             }
-
             $file->delete();
         }
 
-        // 2️⃣ Hapus semua subfolder secara recursive
         foreach ($folder->children as $child) {
             $this->deleteFolderRecursive($child);
         }
 
-        // 3️⃣ Baru hapus folder fisik (SETELAH file & child hilang)
         if (Storage::exists($folder->path)) {
             try {
                 Storage::deleteDirectory($folder->path);
@@ -367,23 +336,6 @@ class ProjectController extends Controller
             }
         }
 
-        // 4️⃣ Hapus folder database
         $folder->delete();
     }
-
-    public function destroy(\App\Models\Project $project)
-    {
-        // Ambil root folder project
-        $rootFolder = $project->folders()->whereNull('parent_id')->first();
-
-        if ($rootFolder) {
-            $this->deleteFolderRecursive($rootFolder);
-        }
-
-        $project->delete();
-
-        return redirect()->route('projects.index')
-            ->with('success', 'Project deleted successfully.');
-    }
-
 }
